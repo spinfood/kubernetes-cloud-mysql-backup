@@ -1,59 +1,39 @@
-# Set the base image
-FROM alpine:3.15.0
+# Set the base image to MySQL 8.3.0, which uses microdnf
+FROM mysql:8.3.0
 
-# Install required packages
-RUN apk -v --update add \
-    python3 \
-    py-pip \
-    groff \
+# Install additional required packages
+USER root
+RUN microdnf update && \
+    microdnf install -y \
+    python3-pip \
     less \
     mailcap \
-    mysql-client \
     curl \
-    py-crcmod \
-    bash \
-    libc6-compat \
     gnupg \
-    coreutils \
     gzip \
-    go \
-    git && \
+    git \
+    go && \
     pip3 install --upgrade awscli s3cmd python-magic && \
-    rm /var/cache/apk/*
+    microdnf clean all
 
 # Set Default Environment Variables
-ENV BACKUP_CREATE_DATABASE_STATEMENT=false
-ENV TARGET_DATABASE_PORT=3306
-ENV SLACK_ENABLED=false
-ENV SLACK_USERNAME=kubernetes-s3-mysql-backup
-ENV CLOUD_SDK_VERSION=367.0.0
-# Release commit for https://github.com/FiloSottile/age/tree/v1.0.0
-ENV AGE_VERSION=552aa0a07de0b42c16126d3107bd8895184a69e7
-ENV BACKUP_PROVIDER=aws
+ENV BACKUP_CREATE_DATABASE_STATEMENT=false \
+    TARGET_DATABASE_PORT=3306 \
+    CLOUD_SDK_VERSION=367.0.0 \
+    # Release commit for https://github.com/FiloSottile/age
+    AGE_VERSION=552aa0a07de0b42c16126d3107bd8895184a69e7
 
-# Install FiloSottile/age (https://github.com/FiloSottile/age)
-RUN git clone https://filippo.io/age && \
-    cd age && \
+# Install FiloSottile/age for encryption, adjusting for the go environment
+RUN git clone https://github.com/FiloSottile/age.git /tmp/age && \
+    cd /tmp/age && \
     git checkout $AGE_VERSION && \
-    go build -o . filippo.io/age/cmd/... && cp age /usr/local/bin/
+    go build -o . ./cmd/age && \
+    cp age /usr/local/bin/ && \
+    rm -rf /tmp/age
 
-# Set Google Cloud SDK Path
-ENV PATH /google-cloud-sdk/bin:$PATH
+# Assume you have a backup script that uses mysqldump, awscli, etc.
+COPY resources/perform-backup.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/perform-backup.sh
 
-# Install Google Cloud SDK
-RUN curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-${CLOUD_SDK_VERSION}-linux-x86_64.tar.gz && \
-    tar xzf google-cloud-sdk-${CLOUD_SDK_VERSION}-linux-x86_64.tar.gz && \
-    rm google-cloud-sdk-${CLOUD_SDK_VERSION}-linux-x86_64.tar.gz && \
-    gcloud config set core/disable_usage_reporting true && \
-    gcloud config set component_manager/disable_update_check true && \
-    gcloud config set metrics/environment github_docker_image && \
-    gcloud --version
-
-# Copy Slack Alert script and make executable
-COPY resources/slack-alert.sh /
-RUN chmod +x /slack-alert.sh
-
-# Copy backup script and execute
-COPY resources/perform-backup.sh /
-RUN chmod +x /perform-backup.sh
-CMD ["sh", "/perform-backup.sh"]
+# Set the entrypoint to execute the backup script
+CMD ["/usr/local/bin/perform-backup.sh"]
